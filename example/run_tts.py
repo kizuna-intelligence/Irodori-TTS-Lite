@@ -22,7 +22,10 @@ def main() -> int:
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--checkpoint", default=None,
+                        help="Local path or hf://<org>/<repo>/<file>. "
+                             "Omit to auto-download from "
+                             "kizuna-intelligence/Irodori-TTS-Lite-int4.")
     parser.add_argument("--text", required=True)
     parser.add_argument("--output-wav", default="/tmp/irodori_tts_lite_sample.wav")
     parser.add_argument("--seconds", type=float, default=None,
@@ -54,12 +57,16 @@ def main() -> int:
     )
     irodori_tts_lite.patch()
 
+    checkpoint_path = irodori_tts_lite.resolve_checkpoint(args.checkpoint)
+    if checkpoint_path != (args.checkpoint or ""):
+        print(f"[run_tts] checkpoint: {checkpoint_path}")
+
     # Defer infer import until after the runtime is patched so it picks up
     # our hooks the first time it constructs an InferenceRuntime.
     import infer
     infer.FIXED_SECONDS = float(args.seconds)
 
-    sys.argv = [sys.argv[0], "--checkpoint", args.checkpoint, "--text", args.text,
+    sys.argv = [sys.argv[0], "--checkpoint", checkpoint_path, "--text", args.text,
                 "--output-wav", args.output_wav]
     if args.no_ref:
         sys.argv.append("--no-ref")

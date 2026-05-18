@@ -13,6 +13,7 @@ dependencies = [
     "torch>=2.4",
     "triton>=3.0",
     "safetensors>=0.4",
+    "huggingface_hub>=0.24",
 ]
 
 [project.optional-dependencies]

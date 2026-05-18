@@ -46,7 +46,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["int4", "bf16", "fp32"], required=True,
                         help="int4: 本リポジトリの量子化推論. bf16/fp32: 未量子化との比較用.")
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--checkpoint", default=None,
+                        help="Local path or hf://<org>/<repo>/<file>. "
+                             "int4 モードで省略時は kizuna-intelligence/Irodori-TTS-Lite-int4 "
+                             "から自動ダウンロード.")
     parser.add_argument("--text", default="こんにちは、メラだよ。")
     parser.add_argument("--output-wav", default="/tmp/peak_mem_probe.wav")
     parser.add_argument("--num-steps", type=int, default=6)
@@ -67,8 +70,12 @@ def main() -> int:
             use_fused=True, force_fp16=True, codec_int4=args.codec_int4,
         )
         irodori_tts_lite.patch()
+        checkpoint_path = irodori_tts_lite.resolve_checkpoint(args.checkpoint)
         precision = "fp32"   # patched loader overrides to fp16 regardless
     else:
+        if not args.checkpoint:
+            parser.error("--checkpoint is required for bf16/fp32 modes")
+        checkpoint_path = args.checkpoint
         precision = args.mode
 
     torch.cuda.empty_cache()
@@ -78,7 +85,7 @@ def main() -> int:
     # ---- argv assembly ----
     sys.argv = [
         sys.argv[0],
-        "--checkpoint", args.checkpoint,
+        "--checkpoint", checkpoint_path,
         "--text", args.text,
         "--output-wav", args.output_wav,
         "--num-steps", str(args.num_steps),

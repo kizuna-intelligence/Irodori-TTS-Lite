@@ -23,6 +23,12 @@ from .packed_conv import (
     PackedInt4ConvTranspose1d,
     replace_conv_with_packed,
 )
+from .weights import (
+    DEFAULT_DACVAE_FILE,
+    DEFAULT_DIT_FILE,
+    DEFAULT_REPO,
+    resolve_checkpoint,
+)
 
 __all__ = [
     "FusedInt4Linear",
@@ -32,6 +38,10 @@ __all__ = [
     "PackedInt4Conv1d",
     "PackedInt4ConvTranspose1d",
     "replace_conv_with_packed",
+    "resolve_checkpoint",
+    "DEFAULT_REPO",
+    "DEFAULT_DIT_FILE",
+    "DEFAULT_DACVAE_FILE",
 ]
 
 __version__ = "0.1.0"
