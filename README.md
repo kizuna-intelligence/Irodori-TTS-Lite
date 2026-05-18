@@ -211,6 +211,12 @@ pip install -e .[infer]
 
 ---
 
+## 上流
+
+DACVAE コーデックは [Aratako/Semantic-DACVAE-Japanese-32dim](https://huggingface.co/Aratako/Semantic-DACVAE-Japanese-32dim) を 4-bit 量子化して使わせていただいています。
+
+---
+
 ## ライセンス
 
 [MIT License](LICENSE)
