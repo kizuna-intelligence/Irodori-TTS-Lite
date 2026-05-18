@@ -213,7 +213,10 @@ pip install -e .[infer]
 
 ## 上流
 
-DACVAE コーデックは [Aratako/Semantic-DACVAE-Japanese-32dim](https://huggingface.co/Aratako/Semantic-DACVAE-Japanese-32dim) を 4-bit 量子化して使わせていただいています。
+- TTS パイプライン本体: [Aratako/Irodori-TTS](https://github.com/Aratako/Irodori-TTS)
+- DACVAE コーデック: [Aratako/Semantic-DACVAE-Japanese-32dim](https://huggingface.co/Aratako/Semantic-DACVAE-Japanese-32dim)
+
+どちらも Aratako 氏の成果物を 4-bit 量子化して使わせていただいています。
 
 ---
 
