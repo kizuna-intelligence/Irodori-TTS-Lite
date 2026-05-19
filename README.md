@@ -165,9 +165,8 @@ AdaLN を eager-dequant している理由は、12 個の小さな projection ×
 │   ├── checkpoint_loader.py  # inference_runtime へのモンキーパッチ
 │   ├── fused_int4_linear.py  # Triton カーネル（OneCompression からベンダリング）
 │   ├── quant_utils.py        # GPTQ-v1 unpack + RTN-extras dequant
-│   └── packed_conv.py        # DACVAE 用 int4 packed Conv1d / ConvTranspose1d
-├── weights/
-│   └── dit_int4.safetensors  # 279 MB（Git LFS）
+│   ├── packed_conv.py        # DACVAE 用 int4 packed Conv1d / ConvTranspose1d
+│   └── weights.py            # HF からの自動ダウンロード
 ├── example/
 │   └── run_tts.py            # 単発合成サンプル
 ├── tools/

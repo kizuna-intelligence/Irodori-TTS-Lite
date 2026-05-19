@@ -10,13 +10,13 @@ activation を **すべて含めた** 値を返す。
 
     python tools/measure_peak_memory.py \\
         --mode int4 \\
-        --checkpoint weights/dit_int4.safetensors \\
         --text "こんにちは" \\
         --num-steps 6 \\
         --no-ref
 
-`--mode fp16` / `--mode fp32` を指定すると、未量子化チェックポイントとの
-比較が可能（その場合は `--checkpoint` に元の checkpoint を渡す）。
+int4 モードで `--checkpoint` を省略すると HF から自動 DL。`--mode bf16` /
+`--mode fp32` を指定すると未量子化との比較が可能（この場合は `--checkpoint`
+に元の checkpoint を渡す）。
 """
 from __future__ import annotations
 

@@ -12,8 +12,9 @@
                                       |  irodori_tts_lite.patch() で差し込み
                                       |
    +-----------------------+    +-----+---------------------+
-   |  weights/             |    |  irodori_tts_lite          |
-   |   *.safetensors       |--->|   checkpoint_loader.py     |
+   |  HF Hub               |    |  irodori_tts_lite          |
+   |  Irodori-TTS-Lite-int4|--->|   checkpoint_loader.py     |
+   |  *.safetensors        |    |   weights.py (auto-DL)     |
    |   (4-bit, metadata    |    |    ・metadata から         |
    |    に量子化レコード)  |    |       quant_layers_json /  |
    +-----------------------+    |       extra_quant_layers_  |

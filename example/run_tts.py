@@ -1,14 +1,11 @@
 """Minimal end-to-end example: int4 TTS inference via Irodori-TTS-Lite.
 
-Loads the int4-quantized DiT shipped under `weights/` and runs inference
-through the upstream TTS pipeline's `infer.main()`.
-
-Run from the repo root::
+Auto-downloads the int4 DiT from kizuna-intelligence/Irodori-TTS-Lite-int4 on
+first run (override with --checkpoint <path> or hf://...).
 
     python example/run_tts.py \\
-        --checkpoint weights/dit_int4.safetensors \\
         --text "こんにちは、メラだよ！" \\
-        --out /tmp/mera.wav \\
+        --output-wav /tmp/mera.wav \\
         --no-ref
 """
 from __future__ import annotations
