@@ -132,6 +132,7 @@ infer.main()
 | `disable_eager` | `False` | AdaLN の eager-dequant を無効化（デバッグ用） |
 | `codec_int4` | `False` | DACVAE コーデックの NormConv1d / NormConvTranspose1d を int4 packed に置き換える（VRAM ピーク ~525 MB 削減、decode は ~170→330 ms） |
 | `codec_int4_groupsize` | `32` | コーデック int4 量子化のグループサイズ |
+| `adaln_streaming` | `False` | AdaLN projection を eager-dequant せず、forward 中に都度 dequant する（VRAM ~30-60 MB 削減、推論速度は数 % 悪化見込み）|
 
 > ⚠️ 現状、`FusedInt4Linear` の fp32 入力フォールバックパスに既知の shape-check 制限があります。推論時は `force_fp16=True`（または `example/run_tts.py` のデフォルト）を推奨します。
 

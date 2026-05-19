@@ -23,6 +23,7 @@ from .packed_conv import (
     PackedInt4ConvTranspose1d,
     replace_conv_with_packed,
 )
+from .streaming_linear import StreamingInt4Linear
 from .weights import (
     DEFAULT_DACVAE_FILE,
     DEFAULT_DIT_FILE,
@@ -38,6 +39,7 @@ __all__ = [
     "PackedInt4Conv1d",
     "PackedInt4ConvTranspose1d",
     "replace_conv_with_packed",
+    "StreamingInt4Linear",
     "resolve_checkpoint",
     "DEFAULT_REPO",
     "DEFAULT_DIT_FILE",

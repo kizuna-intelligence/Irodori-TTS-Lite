@@ -27,6 +27,7 @@ from .quant_utils import (
     dequant_extra_u8_to_weight,
     dequant_gptq_to_fp,
 )
+from .streaming_linear import StreamingInt4Linear
 
 
 # AdaLN: 12 small projections × 12 DiT blocks × N RF steps ⇒ thousands of
@@ -40,6 +41,11 @@ class _Options:
     disable_eager: bool = False
     codec_int4: bool = False
     codec_int4_groupsize: int = 32
+    # When True, AdaLN projections are NOT eager-dequantised at load time —
+    # they keep the packed int4 weights resident and dequant per-forward.
+    # Saves ~30-60 MB of permanent fp16 weight residency at the cost of a
+    # small per-call dequant overhead. See streaming_linear.py.
+    adaln_streaming: bool = False
 
 
 _opts = _Options()
@@ -52,6 +58,7 @@ def configure(
     disable_eager: bool | None = None,
     codec_int4: bool | None = None,
     codec_int4_groupsize: int | None = None,
+    adaln_streaming: bool | None = None,
 ) -> None:
     """Adjust runtime knobs before the first `from_key` call."""
     if use_fused is not None:
@@ -64,6 +71,8 @@ def configure(
         _opts.codec_int4 = codec_int4
     if codec_int4_groupsize is not None:
         _opts.codec_int4_groupsize = codec_int4_groupsize
+    if adaln_streaming is not None:
+        _opts.adaln_streaming = adaln_streaming
 
 
 def _should_eager_dequant(name: str) -> bool:
@@ -154,6 +163,26 @@ def _build_fused_from_entry(entry: dict, layer_state: dict, device: torch.device
     )
 
 
+def _build_streaming_from_entry(entry: dict, layer_state: dict,
+                                 device: torch.device) -> StreamingInt4Linear:
+    """Lazy-dequant Linear: keep packed int4 resident, materialise in forward."""
+    in_f = int(entry["in_features"])
+    out_f = int(entry["out_features"])
+    groupsize = int(entry.get("groupsize", 32))
+    v1 = entry.get("checkpoint_format", "gptq") != "gptq_v2"
+    return StreamingInt4Linear(
+        in_features=in_f,
+        out_features=out_f,
+        qweight=layer_state["qweight"].to(device),
+        scales=layer_state["scales"].to(device=device, dtype=torch.float16),
+        qzeros=layer_state["qzeros"].to(device),
+        g_idx=layer_state["g_idx"].to(device),
+        bias=(layer_state["bias"].to(device) if "bias" in layer_state else None),
+        groupsize=groupsize,
+        v1=v1,
+    )
+
+
 def _build_eager_linear(entry: dict, layer_state: dict, dtype: torch.dtype,
                         device: torch.device) -> torch.nn.Linear:
     in_f = int(entry["in_features"])
@@ -206,7 +235,7 @@ def _patched_from_key(cls, key):
     model = model.to(target_device)
 
     eager_dtype = torch.float16 if _opts.force_fp16 else model_dtype
-    fused_count = eager_count = fallback_count = 0
+    fused_count = eager_count = streaming_count = fallback_count = 0
     if _PENDING_SWAPS:
         modules = dict(model.named_modules())
         for name, info in _PENDING_SWAPS.items():
@@ -216,9 +245,20 @@ def _patched_from_key(cls, key):
             parent = modules.get(parent_name) if parent_name else model
 
             if _should_eager_dequant(name):
-                lin = _build_eager_linear(entry, layer_state, eager_dtype, target_device)
-                setattr(parent, child_name, lin)
-                eager_count += 1
+                if _opts.adaln_streaming and _can_use_fused(
+                    int(entry["in_features"]), int(entry["out_features"]),
+                    int(entry["wbits"]), int(entry["groupsize"]),
+                    bool(entry.get("actorder", False)),
+                ):
+                    streaming = _build_streaming_from_entry(
+                        entry, layer_state, target_device
+                    )
+                    setattr(parent, child_name, streaming)
+                    streaming_count += 1
+                else:
+                    lin = _build_eager_linear(entry, layer_state, eager_dtype, target_device)
+                    setattr(parent, child_name, lin)
+                    eager_count += 1
             elif _opts.use_fused and _can_use_fused(
                 int(entry["in_features"]), int(entry["out_features"]),
                 int(entry["wbits"]), int(entry["groupsize"]),
@@ -234,7 +274,7 @@ def _patched_from_key(cls, key):
         _PENDING_SWAPS.clear()
         print(
             f"[irodori_tts_lite] fused={fused_count} eager_dequant={eager_count} "
-            f"fallback={fallback_count}"
+            f"streaming={streaming_count} fallback={fallback_count}"
         )
 
     if _PENDING_EXTRA:
@@ -284,9 +324,12 @@ def _patched_from_key(cls, key):
 
     # Cast remaining fp32 chunks to model_dtype on CPU, then move to GPU. This
     # avoids allocating fp32 transients in VRAM during the .to(device) hop.
+    # FusedInt4Linear / StreamingInt4Linear own packed integer buffers that
+    # must not be touched by a dtype cast.
+    _packed_int_classes = (FusedInt4Linear, StreamingInt4Linear)
     if target_device.type == "cpu" and model_device.type != "cpu":
         for mod in model.modules():
-            if isinstance(mod, FusedInt4Linear):
+            if isinstance(mod, _packed_int_classes):
                 continue
             for pname, p in list(mod._parameters.items()):
                 if p is not None and p.dtype.is_floating_point and p.dtype != model_dtype:
@@ -300,7 +343,7 @@ def _patched_from_key(cls, key):
 
     if _opts.force_fp16:
         for _, mod in model.named_modules():
-            if isinstance(mod, FusedInt4Linear):
+            if isinstance(mod, _packed_int_classes):
                 continue
             for pname, p in list(mod._parameters.items()):
                 if p is not None and p.dtype.is_floating_point:
