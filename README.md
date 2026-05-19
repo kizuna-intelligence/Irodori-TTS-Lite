@@ -139,11 +139,12 @@ infer.main()
 
 ## 仕組み
 
-量子化ウェイトは安全テンソルのメタデータ内に二系統で記録されています:
+量子化ウェイトは安全テンソルのメタデータ内に三系統で記録されています:
 
 | スコープ | 形式 | ロード時の置換先 |
 | --- | --- | --- |
 | DiT block の Linear（q/k/v/o、SwiGLU MLP の w1/w2/w3） | GPTQ uniform 4-bit, groupsize=32 | `FusedInt4Linear`（Triton カーネル） |
+| DiT block の FFN（`tools/requantize_dit_ffn_2bit.py` 適用後） | RTN 2-bit, uint8 (4 vals/byte) pack | `StreamingInt2Linear`（forward 内で都度 dequant、Triton 不要） |
 | AdaLN projection | GPTQ 4-bit | eager-dequant → fp16 `nn.Linear` |
 | エンコーダ / cond_module / text_embedding / RMSNorm 拡張 | RTN 4-bit, uint8-nibble pack | eager-dequant → fp16 module（型はターゲットに合わせる） |
 

@@ -27,6 +27,7 @@ from .quant_utils import (
     dequant_extra_u8_to_weight,
     dequant_gptq_to_fp,
 )
+from .streaming_int2_linear import StreamingInt2Linear
 
 
 # AdaLN: 12 small projections × 12 DiT blocks × N RF steps ⇒ thousands of
@@ -85,6 +86,7 @@ def _can_use_fused(in_features: int, out_features: int, wbits: int, groupsize: i
 
 _PENDING_SWAPS: dict[str, dict] = {}
 _PENDING_EXTRA: dict[str, dict] = {}
+_PENDING_2BIT: dict[str, dict] = {}
 
 
 def _patched_load(path):
@@ -92,6 +94,7 @@ def _patched_load(path):
     state, cfg, train_cfg = _orig_load(path)
     quant_layers = None
     extra_layers = None
+    extra_2bit = None
     try:
         with safe_open(str(path), framework="pt", device="cpu") as f:
             md = f.metadata() or {}
@@ -99,11 +102,14 @@ def _patched_load(path):
                 quant_layers = json.loads(md["quant_layers_json"])
             if "extra_quant_layers_json" in md:
                 extra_layers = json.loads(md["extra_quant_layers_json"])
+            if "extra_quant_2bit_json" in md:
+                extra_2bit = json.loads(md["extra_quant_2bit_json"])
     except Exception:
         quant_layers = None
         extra_layers = None
+        extra_2bit = None
 
-    if not quant_layers and not extra_layers:
+    if not quant_layers and not extra_layers and not extra_2bit:
         return state, cfg, train_cfg
 
     if quant_layers:
@@ -138,6 +144,23 @@ def _patched_load(path):
             if bkey in state:
                 tensors["bias"] = state.pop(bkey)
             _PENDING_EXTRA[name] = {"entry": entry, "tensors": tensors}
+
+    if extra_2bit:
+        print(
+            f"[irodori_tts_lite] detected {len(extra_2bit)} 2-bit FFN layers"
+        )
+        _PENDING_2BIT.clear()
+        for entry in extra_2bit:
+            name = entry["name"]
+            tensors = {}
+            for s in ("qweight_u8", "scales", "zeros"):
+                k = f"_extra2.{name}.{s}"
+                if k in state:
+                    tensors[s] = state.pop(k)
+            bkey = f"{name}.bias"
+            if bkey in state:
+                tensors["bias"] = state.pop(bkey)
+            _PENDING_2BIT[name] = {"entry": entry, "tensors": tensors}
 
     return state, cfg, train_cfg
 
@@ -237,6 +260,34 @@ def _patched_from_key(cls, key):
             f"fallback={fallback_count}"
         )
 
+    if _PENDING_2BIT:
+        modules_now = dict(model.named_modules())
+        twobit_count = 0
+        for name, info in _PENDING_2BIT.items():
+            entry = info["entry"]
+            tensors = info["tensors"]
+            in_f = int(entry["in_features"])
+            out_f = int(entry["out_features"])
+            parent_name, _, child_name = name.rpartition(".")
+            parent = modules_now.get(parent_name) if parent_name else model
+            if parent is None:
+                raise KeyError(f"2-bit target parent not found: {parent_name}")
+            bias = tensors.get("bias")
+            if bias is not None:
+                bias = bias.to(device=target_device, dtype=eager_dtype)
+            layer = StreamingInt2Linear(
+                in_features=in_f,
+                out_features=out_f,
+                qweight_u8=tensors["qweight_u8"].to(target_device),
+                scales=tensors["scales"].to(device=target_device, dtype=torch.float16),
+                zeros=tensors["zeros"].to(device=target_device, dtype=torch.float16),
+                bias=bias,
+            )
+            setattr(parent, child_name, layer)
+            twobit_count += 1
+        _PENDING_2BIT.clear()
+        print(f"[irodori_tts_lite] streaming_2bit={twobit_count}")
+
     if _PENDING_EXTRA:
         modules_now = dict(model.named_modules())
         extra_count = 0
@@ -284,9 +335,12 @@ def _patched_from_key(cls, key):
 
     # Cast remaining fp32 chunks to model_dtype on CPU, then move to GPU. This
     # avoids allocating fp32 transients in VRAM during the .to(device) hop.
+    # FusedInt4Linear / StreamingInt2Linear own packed integer buffers that
+    # must not be touched by a dtype cast.
+    _packed_int_classes = (FusedInt4Linear, StreamingInt2Linear)
     if target_device.type == "cpu" and model_device.type != "cpu":
         for mod in model.modules():
-            if isinstance(mod, FusedInt4Linear):
+            if isinstance(mod, _packed_int_classes):
                 continue
             for pname, p in list(mod._parameters.items()):
                 if p is not None and p.dtype.is_floating_point and p.dtype != model_dtype:
@@ -300,7 +354,7 @@ def _patched_from_key(cls, key):
 
     if _opts.force_fp16:
         for _, mod in model.named_modules():
-            if isinstance(mod, FusedInt4Linear):
+            if isinstance(mod, _packed_int_classes):
                 continue
             for pname, p in list(mod._parameters.items()):
                 if p is not None and p.dtype.is_floating_point:
