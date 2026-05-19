@@ -77,8 +77,8 @@ def _can_use_fused(in_features: int, out_features: int, wbits: int, groupsize: i
     return (
         not actorder
         and wbits == 4
-        and groupsize == 32
-        and in_features % 32 == 0
+        and groupsize in (32, 64)
+        and in_features % groupsize == 0
         and out_features % 8 == 0
     )
 

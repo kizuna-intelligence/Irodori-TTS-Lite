@@ -20,11 +20,15 @@ The kernel is designed for the DiT inference shape regime: M ~ 64-128
 
 Currently supports only:
     wbits = 4
-    groupsize = 32
+    groupsize in {32, 64}
     actorder = False
-    fp16 input/output
+    fp16 / bf16 / fp32 input (fp32 silently downcast)
 
-These cover 100% of the shipped quantized-DiT layers.
+groupsize 32 covers the original shipped checkpoint. groupsize 64 is
+supported for layers that have been re-packed by
+``tools/repack_swiglu_gate_g64.py`` (SwiGLU gate `mlp.w1`); a wider
+group halves the scales/qzeros bytes for those layers at a small
+quantisation-quality cost.
 """
 from __future__ import annotations
 
@@ -181,6 +185,9 @@ def _fused_int4_gemm_kernel(
     tl.store(c_ptrs, c_tile, mask=(offs_m[:, None] < M) & n_mask[None, :])
 
 
+_SUPPORTED_GROUPSIZES = (32, 64)
+
+
 def fused_int4_gemm(
     a: torch.Tensor,
     qweight: torch.Tensor,
@@ -197,12 +204,14 @@ def fused_int4_gemm(
         scales:  [K // groupsize, N] fp16.
         qzeros:  [K // groupsize, N // 8] int32 (v1 -1 offset).
         bias:    optional [N] fp16/fp32.
-        groupsize: per-group quantisation size; must be 32 in this kernel.
+        groupsize: per-group quantisation size; must be 32 or 64.
 
     Returns:
         [..., N] fp16 output (same leading shape as ``a``).
     """
-    assert groupsize == 32, "fused_int4_gemm currently supports groupsize=32 only"
+    assert groupsize in _SUPPORTED_GROUPSIZES, (
+        f"fused_int4_gemm supports groupsize in {_SUPPORTED_GROUPSIZES}, got {groupsize}"
+    )
     assert qweight.dtype == torch.int32
     assert qzeros.dtype == torch.int32
     assert a.dtype in (torch.float16, torch.bfloat16, torch.float32), (
@@ -233,7 +242,9 @@ def fused_int4_gemm(
         f"qzeros shape mismatch: expected ({K//groupsize}, {N//8}), got {tuple(qzeros.shape)}"
     )
     assert N % 8 == 0, f"N must be a multiple of 8 (qzeros packing), got N={N}"
-    assert K % 32 == 0, f"K must be a multiple of 32 (groupsize), got K={K}"
+    assert K % groupsize == 0, (
+        f"K must be a multiple of groupsize ({groupsize}), got K={K}"
+    )
 
     c = torch.empty((M, N), dtype=a.dtype, device=a.device)
 
@@ -271,6 +282,9 @@ def fused_int4_gemm(
     # overhead but consumes more shared memory (BM*K_BLK*2 + BN*K_BLK*2 per
     # stage); RTX 3090 caps SMEM at ~100KB.  nkg=8 (K_BLK=256) wins at
     # small-M tiles (BM*BN ≤ 1024) but exceeds SMEM at fat tiles.
+    # For groupsize=64 the per-group K rows already doubles, so halve the
+    # nkg choice to keep K_BLK at the same byte budget that was tuned on
+    # groupsize=32.
     tile_area = BLOCK_M * BLOCK_N
     if tile_area <= 1024 and K % 256 == 0:
         NUM_K_GROUPS = 8
@@ -282,6 +296,10 @@ def fused_int4_gemm(
         NUM_K_GROUPS = 2
     else:
         NUM_K_GROUPS = 1
+    if groupsize == 64:
+        # Cap K_BLK at 256 (= 4 * 64) to preserve the SMEM envelope tuned for
+        # g=32 / K_BLK ≤ 256. Effectively halves the heuristic above.
+        NUM_K_GROUPS = max(1, NUM_K_GROUPS // 2)
 
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N),)
 
@@ -340,7 +358,9 @@ class FusedInt4Linear(torch.nn.Module):
         groupsize: int = 32,
     ):
         super().__init__()
-        assert groupsize == 32, "FusedInt4Linear supports groupsize=32 only"
+        assert groupsize in _SUPPORTED_GROUPSIZES, (
+            f"FusedInt4Linear supports groupsize in {_SUPPORTED_GROUPSIZES}, got {groupsize}"
+        )
         self.in_features = in_features
         self.out_features = out_features
         self.groupsize = groupsize
@@ -412,14 +432,15 @@ class FusedInt4Linear(torch.nn.Module):
 
     @classmethod
     def from_gptq_linear(cls, layer) -> "FusedInt4Linear":
-        """Build a FusedInt4Linear from a GPTQLinear (4-bit, groupsize=32).
+        """Build a FusedInt4Linear from a GPTQLinear (4-bit, groupsize 32 or 64).
 
         Reuses the saved packed buffers verbatim — no re-quantisation.
         """
         assert layer.wbits == 4, f"FusedInt4Linear requires wbits=4, got {layer.wbits}"
-        assert (
-            layer.groupsize == 32
-        ), f"FusedInt4Linear requires groupsize=32, got {layer.groupsize}"
+        assert layer.groupsize in _SUPPORTED_GROUPSIZES, (
+            f"FusedInt4Linear requires groupsize in {_SUPPORTED_GROUPSIZES}, "
+            f"got {layer.groupsize}"
+        )
         return cls(
             in_features=layer.in_features,
             out_features=layer.out_features,
@@ -427,7 +448,7 @@ class FusedInt4Linear(torch.nn.Module):
             scales=layer.scales.to(torch.float16),
             qzeros=layer.qzeros,
             bias=layer.bias if layer.bias is not None else None,
-            groupsize=32,
+            groupsize=layer.groupsize,
         )
 
     def _build_cfg(self, M: int) -> tuple:
@@ -476,6 +497,9 @@ class FusedInt4Linear(torch.nn.Module):
             NUM_K_GROUPS = 2
         else:
             NUM_K_GROUPS = 1
+        if self.groupsize == 64:
+            # See fused_int4_gemm: keep K_BLK ≤ 256 to preserve SMEM budget.
+            NUM_K_GROUPS = max(1, NUM_K_GROUPS // 2)
 
         # Occupancy cap for large M: each stage's SMEM scales with K_BLK, so a
         # fatter K_BLK forces fewer CTAs/SM. For large M the kernel becomes
@@ -550,7 +574,7 @@ class FusedInt4Linear(torch.nn.Module):
             self.qzeros.stride(0), self.qzeros.stride(1),
             c.stride(0), c.stride(1),
             HAS_BIAS=self._has_bias,
-            GROUPSIZE=32,
+            GROUPSIZE=self.groupsize,
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
             NUM_K_GROUPS=NUM_K_GROUPS,
             K_LOGICAL=self.in_features,
