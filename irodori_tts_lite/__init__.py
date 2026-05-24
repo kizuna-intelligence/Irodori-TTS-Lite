@@ -17,8 +17,8 @@ Usage::
 from __future__ import annotations
 
 from .checkpoint_loader import configure, patch
-from .fused_int4_linear import FusedInt4Linear, fused_int4_gemm
-from .packed_conv import (
+from onecomp_runtime.layers import FusedInt4Linear, fused_int4_gemm
+from onecomp_runtime.layers import (
     PackedInt4Conv1d,
     PackedInt4ConvTranspose1d,
     replace_conv_with_packed,

@@ -9,10 +9,12 @@ description = "Int4-quantized TTS DiT inference runtime."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+# int4 kernels, GPTQ/RTN unpack-dequant, PackedRTNLinear/PackedEmbedding and the
+# int4 conv layers all come from the shared onecomp-runtime package (which pulls
+# torch/triton/safetensors transitively). This repo keeps only the TTS-specific
+# checkpoint loader + monkey-patch glue.
 dependencies = [
-    "torch>=2.4",
-    "triton>=3.0",
-    "safetensors>=0.4",
+    "onecomp-runtime @ git+https://github.com/kizuna-intelligence/onecompression-runtime@main",
     "huggingface_hub>=0.24",
 ]
 

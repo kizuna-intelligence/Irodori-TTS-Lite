@@ -22,8 +22,8 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
-from .fused_int4_linear import FusedInt4Linear
-from .quant_utils import (
+from onecomp_runtime.layers import FusedInt4Linear
+from onecomp_runtime.quant_utils import (
     dequant_extra_u8_to_weight,
     dequant_gptq_to_fp,
 )
@@ -287,7 +287,7 @@ def _patched_from_key(cls, key):
         )
 
     if _PENDING_EXTRA:
-        from .packed_linear import PackedRTNLinear
+        from onecomp_runtime.layers import PackedRTNLinear
         modules_now = dict(model.named_modules())
         extra_count = 0
         packed_count = 0
@@ -362,7 +362,7 @@ def _patched_from_key(cls, key):
         )
 
     if _PENDING_EMBED:
-        from .packed_linear import PackedEmbedding
+        from onecomp_runtime.layers import PackedEmbedding
         modules_now = dict(model.named_modules())
         embed_count = 0
         for name, info in _PENDING_EMBED.items():
@@ -485,7 +485,7 @@ def _patched_from_key(cls, key):
             deterministic_decode=bool(key.codec_deterministic_decode),
             **_codec_extra_kwargs,
         )
-        from .packed_conv import replace_conv_with_packed
+        from onecomp_runtime.layers import replace_conv_with_packed
         cast_dtype = torch.float16 if _opts.force_fp16 else codec_dtype
         stats = replace_conv_with_packed(
             codec.model, groupsize=_opts.codec_int4_groupsize,
